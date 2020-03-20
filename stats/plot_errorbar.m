@@ -16,7 +16,7 @@ for iVect = 1:size(matrix, 2)
     stringsign1 = sprintf('t = %4.4f', stat.tstat);
     stringsign2 = sprintf('p = %4.4f', p);
 
-    text(iVect-.15, max(matrix)+.1, {stringsign1, stringsign2})
+    text(iVect-.15, max(matrix(:))+.1, {stringsign1, stringsign2})
     
 end
 
@@ -25,7 +25,7 @@ plot(0:iVect+1, ones(iVect+2,1)*rndmlevel,'r', 'LineWidth', 2)
 
 
 set(gca,'XTick', 1:iVect, 'XTickLabel', labels)
-ylim([min(matrix)-.15, max(matrix)+.15])
+ylim([min(matrix(:))-.15, max(matrix(:))+.15])
 
 
 

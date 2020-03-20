@@ -1,4 +1,4 @@
-function [tvals, p, varargout] = mat_paired_ttests(mat1, mat2, cfg)
+function [tvals, varargout] = mat_paired_ttests(mat1, mat2, cfg)
 % the function computes ttests between 3d matrices.
 % features on 1 and 2 dimensions, repetitions on 3rd dimension
 % since it's paired ttest, matrices must have same size.
@@ -24,12 +24,12 @@ function [tvals, p, varargout] = mat_paired_ttests(mat1, mat2, cfg)
 % started by eb 28-Jan-2020     
 
 %% ttest part
-[tvals, p] = local_ttest(mat1, mat2, cfg);
+[tvals, crit_t] = local_ttest(mat1, mat2, cfg);
 
 %% cluster permutation part
 
 % cluster statistics
-[clustermap, clusterstat] = local_determine_clusters(tvals, p, cfg);
+[clustermap, clusterstat] = local_determine_clusters(tvals, crit_t, cfg);
 
 % permutation
 rng(1) % for reproducibility
@@ -47,8 +47,9 @@ if isfield(cfg, 'plot')
         bin_clustmap(bin_clustmap~=0) = 1;
         
         figure; 
-        h1 = imagesc(tvals); hold on;
-        imcontour(bin_clustmap, 'k');
+        h1 = imagesc(cfg.xval, cfg.xval, tvals); hold on;        
+        set(gca,'YDir','normal')
+%         imcontour(bin_clustmap, 'k');
         c = colorbar; 
         c.Label.String = 't values';
         title(sprintf('repeated measure ttest (%i participants)', size(mat1, 3)));
@@ -70,7 +71,7 @@ end
 
 %% ####################### LOCAL FUNCTIONS
 
-function [tvals, p] = local_ttest(mat1, mat2, cfg)
+function [tvals, crit_t] = local_ttest(mat1, mat2, cfg)
 
 n1 = size(mat1, 3); n2 = size(mat2, 3);
 if n1 ~= n2 
@@ -84,55 +85,48 @@ SE = sd_d/sqrt(n1);
 
 tvals = mean_d./SE;
 
-p = tcdf(tvals, n1);
+crit_t = abs(tinv(cfg.alphat, n1-1));        
 
-switch lower(cfg.tails)
+end
+
+function [clustermap, clusterstat] = local_determine_clusters(tvals, crit_t, cfg)
+
+switch cfg.tails
     
     case 'left'
         
-        p = p;         %#ok<ASGSL>
-
-    case 'right'
+        lgcl_sign = tvals < -crit_t;
         
-        p = 1-p;
+    case 'right'
+
+        lgcl_sign = tvals > crit_t;
         
     case 'both'
         
-        p(p>.5) = 1-p(p>.5);
-        p = 2*p;
-        
-    otherwise
-        
-        error('n tails not specified correctly')
+        lgcl_sign = (tvals < -crit_t) | (tvals > crit_t);
         
 end
-
-end
-
-function [clustermap, clusterstat] = local_determine_clusters(tvals, p, cfg)
-
-% determine pvalues below alpha
-lgcl_sign = p<cfg.alphat;
-
+        
 % determine clustermap
 clustermap = bwlabel(lgcl_sign);
 
 % determine clusterstatistics
 vect_clust_lab = unique(clustermap)';
 
-clusterstat = nan(numel(vect_clust_lab)-1,2);
+clusterstat = nan(max(vect_clust_lab),2);
 
+acc = 0;
 for iClust = vect_clust_lab(2:end) % count from label n2, 0 is the null label
-
+    
+    acc = acc +1;
     swap_lgcl = clustermap==iClust;
-    clusterstat(iClust, 2) = sum(tvals(swap_lgcl));
-    clusterstat(iClust, 1) = iClust;
+    clusterstat(acc, 2) = sum(tvals(swap_lgcl));
+    clusterstat(acc, 1) = iClust;
         
 end
 
 % sort clusters according to magnitude
 clusterstat = sortrows(clusterstat, 2, 'descend');
-
 
 end
 
@@ -147,9 +141,6 @@ bigmat = cat(4, mat1, mat2);
 % start permutations
 clust_stat_dist = nan(cfg.nperm, 1);
 [swap_mat1, swap_mat2] = deal(nan(size(mat1)));
-
-% old_diff = mean(mat1, 3)- mean(mat2, 3);
-% figure; imagesc(old_diff); colorbar;
  
 
 for iPerm = 1:cfg.nperm
@@ -162,17 +153,31 @@ for iPerm = 1:cfg.nperm
         swap_mat2(:, :, iPart) = squeeze(bigmat(:,:,iPart,shuffled_idxs(2)));
         
     end
-    
-%     new_diff = mean(swap_mat1, 3)- mean(swap_mat2, 3);
-%     figure; imagesc(new_diff);
-%     ylim([min(old_diff(:)), max(old_diff(:))])
-%     colorbar;
-    
-    [swap_tvals, swap_p] = local_ttest(swap_mat1, swap_mat2, cfg);
-    [~, swap_clusterstat] = local_determine_clusters(swap_tvals, swap_p, cfg);
-    
+        
+    [swap_tvals, crit_t] = local_ttest(swap_mat1, swap_mat2, cfg);
+    [~, swap_clusterstat] = local_determine_clusters(swap_tvals, crit_t, cfg);
+
     if ~isempty(swap_clusterstat)
-        clust_stat_dist(iPerm) = swap_clusterstat(1, 2); % get the highest value
+
+        switch cfg.tails
+
+            case 'left'
+
+                negidxs = swap_clusterstat(:, 2)<0;
+                clust_stat_dist(iPerm) = min(swap_clusterstat(negidxs, 2));
+
+            case 'right'
+
+                posidxs = swap_clusterstat(:, 2)>0;
+                clust_stat_dist(iPerm) = max(swap_clusterstat(posidxs, 2));
+
+            case 'both'
+
+                [~, idx] = max(abs(swap_clusterstat(:, 2)));
+                clust_stat_dist(iPerm) = swap_clusterstat(idx, 2);
+
+        end
+    
     else
         clust_stat_dist(iPerm) = 0;
     end
@@ -180,9 +185,7 @@ for iPerm = 1:cfg.nperm
     if mod(iPerm, 10) == 0 
         fprintf('\n%i permutations done (over %i)', iPerm, cfg.nperm)
     end
-        
-%     waitforbuttonpress
-    
+            
 end
 
 % determine empirical cdf
@@ -194,6 +197,9 @@ nclusts = size(clusterstat, 1);
 for iClusts = 1:nclusts
     
     p_cl = 1-mat_(find(mat_(:,2)<clusterstat(iClusts,2), 1, 'last'), 1);
+
+    if isempty(p_cl); p_cl = 1; end
+        
     clusterstat(iClusts, 3) = p_cl;
 
 end
@@ -203,15 +209,22 @@ end
 
 function signcluster_mask = local_mask(clusterstat, clustermap, cfg)
 
-who_is_significant = find(clusterstat(:,3)<cfg.clustalplha_thresh)';
+if size(clusterstat, 2) > 2
 
-signcluster_mask = false(size(clustermap));
+    who_is_significant = find(clusterstat(:,3)<cfg.clustalplha_thresh)';
 
-for iCluster = who_is_significant
-    
-    clustcode = clusterstat(iCluster, 1);
-    signcluster_mask = signcluster_mask | clustermap == clustcode;
-    
+    signcluster_mask = false(size(clustermap));
+
+    for iCluster = who_is_significant
+
+        clustcode = clusterstat(iCluster, 1);
+        signcluster_mask = signcluster_mask | clustermap == clustcode;
+
+    end
+
+else
+
+    signcluster_mask = false(size(clustermap));
+
 end
-
 end
